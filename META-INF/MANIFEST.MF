@@ -1,0 +1,10 @@
+Manifest-Version: 1.0
+Created-By: Maven JAR Plugin 3.4.1
+Build-Jdk-Spec: 17
+Implementation-Title: JMusicBot
+Implementation-Vendor-Id: com.jagrosh
+Implementation-Version: 0.4.3.7
+Main-Class: com.jagrosh.jmusicbot.JMusicBot
+Specification-Title: JMusicBot
+Specification-Version: 0.4.3.7
+
