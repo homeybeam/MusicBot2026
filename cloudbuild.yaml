@@ -2,6 +2,26 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'us-central1-docker.pkg.dev/dave-487602/jmusicbot/jmusicbot:latest', '.']
 
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/dave-487602/jmusicbot/jmusicbot:latest']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - 'gcloud'
+      - 'run'
+      - 'deploy'
+      - 'jmusicbot'
+      - '--image=us-central1-docker.pkg.dev/dave-487602/jmusicbot/jmusicbot:latest'
+      - '--region=us-central1'
+      - '--no-allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=1'
+      - '--memory=1Gi'
+      - '--cpu=1'
+      - '--no-cpu-throttling'
+      - '--set-secrets=/app/config.txt=jmusicbot-config:latest'
+      - '--project=dave-487602'
+
 images:
   - 'us-central1-docker.pkg.dev/dave-487602/jmusicbot/jmusicbot:latest'
 
