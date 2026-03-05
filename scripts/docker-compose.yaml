@@ -1,0 +1,9 @@
+version: '2.2'
+
+services:
+  jmusicbot:
+    image: jmusicbot25
+    container_name: jmusicbot25-instance
+    restart: unless-stopped
+    volumes:
+     - ./config:/jmb/config
