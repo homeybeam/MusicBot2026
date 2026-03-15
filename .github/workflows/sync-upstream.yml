@@ -1,0 +1,57 @@
+name: Sync Upstream Changes
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # Runs daily at 9am UTC
+  workflow_dispatch:      # Allow manual trigger too
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/arif-banai/MusicBot.git
+          git fetch upstream
+
+      - name: Check for new commits
+        id: check
+        run: |
+          UPSTREAM_COMMITS=$(git log HEAD..upstream/master --oneline | wc -l)
+          echo "count=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          echo "Found $UPSTREAM_COMMITS new upstream commits"
+
+      - name: Create sync branch and PR
+        if: steps.check.outputs.count > 0
+        run: |
+          BRANCH="sync-upstream-$(date +%Y%m%d)"
+          git checkout -b $BRANCH
+          git merge upstream/master -X theirs --no-edit || true
+          git push origin $BRANCH
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Open Pull Request
+        if: steps.check.outputs.count > 0
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: sync-upstream-${{ github.run_id }}
+          title: "Upstream sync from arif-banai/MusicBot"
+          body: |
+            Automated sync from upstream repo arif-banai/MusicBot.
+            
+            Please review changes, test locally with `mvn package` before merging.
+            Merging this PR will trigger a deploy to GCP.
+          base: main
