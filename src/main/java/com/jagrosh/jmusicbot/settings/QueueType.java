@@ -15,11 +15,8 @@
  */
 package com.jagrosh.jmusicbot.settings;
 
-import com.jagrosh.jmusicbot.queue.AbstractQueue;
-import com.jagrosh.jmusicbot.queue.FairQueue;
-import com.jagrosh.jmusicbot.queue.LinearQueue;
-import com.jagrosh.jmusicbot.queue.Queueable;
-import com.jagrosh.jmusicbot.queue.QueueSupplier;
+import com.jagrosh.jmusicbot.queue.*;
+import com.jagrosh.jmusicbot.utils.EnumUtil;
 
 import java.util.Arrays;
 import java.util.List;
@@ -43,6 +40,20 @@ public enum QueueType
         this.userFriendlyName = userFriendlyName;
         this.emoji = emoji;
         this.supplier = supplier;
+    }
+
+    /**
+     * Parses a QueueType from a string, returning the default value if parsing fails.
+     * This handles invalid values gracefully (e.g., from manual editing or data corruption)
+     * instead of throwing IllegalArgumentException.
+     *
+     * @param value the string value to parse
+     * @param defaultValue the default value to return if parsing fails
+     * @return the parsed QueueType, or defaultValue if parsing fails
+     */
+    public static QueueType valueOfOrDefault(String value, QueueType defaultValue)
+    {
+        return EnumUtil.valueOfOrDefault(QueueType.class, value, defaultValue);
     }
 
     public static List<String> getNames()

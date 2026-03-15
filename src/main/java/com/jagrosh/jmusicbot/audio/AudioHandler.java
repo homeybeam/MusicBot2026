@@ -18,30 +18,28 @@ package com.jagrosh.jmusicbot.audio;
 import com.jagrosh.jmusicbot.playlist.PlaylistLoader.Playlist;
 import com.jagrosh.jmusicbot.queue.AbstractQueue;
 import com.jagrosh.jmusicbot.settings.QueueType;
-import com.jagrosh.jmusicbot.utils.TimeUtil;
 import com.jagrosh.jmusicbot.settings.RepeatMode;
+import com.jagrosh.jmusicbot.settings.Settings;
+import com.jagrosh.jmusicbot.utils.MessageFormatter;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter;
 import com.sedmelluq.discord.lavaplayer.tools.FriendlyException;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
+import com.sedmelluq.discord.lavaplayer.track.AudioTrackInfo;
 import com.sedmelluq.discord.lavaplayer.track.playback.AudioFrame;
+import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.audio.AudioSendHandler;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.utils.messages.MessageCreateData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.ByteBuffer;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
-import com.jagrosh.jmusicbot.settings.Settings;
-import com.jagrosh.jmusicbot.utils.FormatUtil;
-import com.sedmelluq.discord.lavaplayer.source.youtube.YoutubeAudioTrack;
-import java.nio.ByteBuffer;
-import net.dv8tion.jda.api.EmbedBuilder;
-import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.audio.AudioSendHandler;
-import net.dv8tion.jda.api.entities.Guild;
-import net.dv8tion.jda.api.entities.User;
-import net.dv8tion.jda.api.utils.messages.MessageCreateBuilder;
-import net.dv8tion.jda.api.utils.messages.MessageCreateData;
-import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -53,6 +51,7 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
     public final static String PAUSE_EMOJI = "\u23F8"; // ⏸
     public final static String STOP_EMOJI  = "\u23F9"; // ⏹
 
+    private final static Logger LOGGER = LoggerFactory.getLogger(AudioHandler.class);
 
     private final List<AudioTrack> defaultQueue = new LinkedList<>();
     private final Set<String> votes = new HashSet<>();
@@ -115,10 +114,14 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
         audioPlayer.stopTrack();
         //current = null;
     }
-    
+
     public boolean isMusicPlaying(JDA jda)
     {
-        return guild(jda).getSelfMember().getVoiceState().inAudioChannel() && audioPlayer.getPlayingTrack()!=null;
+        // Check that the selfMember is connected to a channel where they can receive audio
+        // Check that the audioPlayer has a playingTrack
+        var isBotConnectedToVoice = jda.getGuildById(guildId).getSelfMember().getVoiceState().getChannel() != null;
+        var isAudioPlaying = audioPlayer.getPlayingTrack() != null;
+        return isBotConnectedToVoice && isAudioPlaying;
     }
     
     public Set<String> getVotes()
@@ -171,6 +174,14 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
     @Override
     public void onTrackEnd(AudioPlayer player, AudioTrack track, AudioTrackEndReason endReason) 
     {
+        // Log track end with details for debugging
+        if (endReason != AudioTrackEndReason.FINISHED) {
+            LOGGER.debug("Track {} ended with reason: {} (Track: {})", 
+                    track != null ? track.getIdentifier() : "null",
+                    endReason.name(),
+                    track != null && track.getInfo() != null ? track.getInfo().title : "N/A");
+        }
+        
         RepeatMode repeatMode = manager.getBot().getSettingsManager().getSettings(guildId).getRepeatMode();
         // if the track ended normally, and we're in repeat mode, re-add it to the queue
         if(endReason==AudioTrackEndReason.FINISHED && repeatMode != RepeatMode.OFF)
@@ -186,7 +197,7 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
         {
             if(!playFromDefault())
             {
-                manager.getBot().getNowplayingHandler().onTrackUpdate(null);
+                manager.getBot().getNowplayingHandler().onTrackUpdate(guildId, null);
                 if(!manager.getBot().getConfig().getStay())
                     manager.getBot().closeAudioConnection(guildId);
                 // unpause, in the case when the player was paused and the track has been skipped.
@@ -203,76 +214,104 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
 
     @Override
     public void onTrackException(AudioPlayer player, AudioTrack track, FriendlyException exception) {
-        LoggerFactory.getLogger("AudioHandler").error("Track " + track.getIdentifier() + " has failed to play", exception);
+        // Build detailed error message with track information
+        StringBuilder errorDetails = new StringBuilder();
+        errorDetails.append("Track exception occurred:\n");
+        errorDetails.append("  Track ID: ").append(track.getIdentifier()).append("\n");
+        
+        AudioTrackInfo info = track.getInfo();
+        if (info != null) {
+            errorDetails.append("  Title: ").append(info.title != null ? info.title : "N/A").append("\n");
+            errorDetails.append("  URI: ").append(info.uri != null ? info.uri : "N/A").append("\n");
+            errorDetails.append("  Author: ").append(info.author != null ? info.author : "N/A").append("\n");
+            errorDetails.append("  Duration: ").append(info.length > 0 ? info.length + "ms" : "Unknown").append("\n");
+            errorDetails.append("  Source: ").append(track.getSourceManager() != null ? track.getSourceManager().getSourceName() : "Unknown").append("\n");
+        }
+        
+        errorDetails.append("  Exception Severity: ").append(exception.severity != null ? exception.severity.name() : "UNKNOWN").append("\n");
+        errorDetails.append("  Exception Message: ").append(exception.getMessage() != null ? exception.getMessage() : "N/A").append("\n");
+        
+        // Log request metadata if available
+        RequestMetadata rm = track.getUserData(RequestMetadata.class);
+        if (rm != null && rm.user != null) {
+            errorDetails.append("  Requested by: ").append(rm.user.username).append(" (ID: ").append(rm.user.id).append(")\n");
+        }
+        if (rm != null && rm.requestInfo != null) {
+            errorDetails.append("  Original query: ").append(rm.requestInfo.query != null ? rm.requestInfo.query : "N/A").append("\n");
+        }
+        
+        // Log root cause if available
+        Throwable cause = exception.getCause();
+        if (cause != null) {
+            errorDetails.append("  Root Cause: ").append(cause.getClass().getSimpleName()).append(" - ").append(cause.getMessage()).append("\n");
+            // Log specific error details for common issues
+            if (cause instanceof IllegalStateException) {
+                errorDetails.append("  IllegalStateException details: ").append(cause.getMessage()).append("\n");
+            } else if (cause instanceof com.fasterxml.jackson.core.JsonParseException) {
+                com.fasterxml.jackson.core.JsonParseException jsonEx = (com.fasterxml.jackson.core.JsonParseException) cause;
+                errorDetails.append("  JSON Parse Error at line ").append(jsonEx.getLocation().getLineNr())
+                           .append(", column ").append(jsonEx.getLocation().getColumnNr()).append("\n");
+            }
+        }
+        
+        // Special handling for YouTube OAuth errors
+        if (exception.getMessage().equals("Sign in to confirm you're not a bot")
+            || exception.getMessage().equals("Please sign in")
+            || exception.getMessage().equals("This video requires login."))
+        {
+            LOGGER.error(
+                    "Track {} has failed to play: {}. "
+                            + "You will need to sign in to Google to play YouTube tracks. "
+                            + "More info: https://jmusicbot.com/youtube-oauth2\n{}",
+                    track.getIdentifier(),
+                    exception.getMessage(),
+                    errorDetails.toString()
+            );
+        }
+        else {
+            LOGGER.error("Track {} has failed to play\n{}", track.getIdentifier(), errorDetails.toString(), exception);
+        }
     }
 
     @Override
     public void onTrackStart(AudioPlayer player, AudioTrack track) 
     {
         votes.clear();
-        manager.getBot().getNowplayingHandler().onTrackUpdate(track);
+        
+        // Log track start with details for debugging
+        if (track != null && track.getInfo() != null) {
+            LOGGER.debug("Starting track: {} (ID: {}, URI: {}, Source: {})",
+                    track.getInfo().title,
+                    track.getIdentifier(),
+                    track.getInfo().uri,
+                    track.getSourceManager() != null ? track.getSourceManager().getSourceName() : "Unknown");
+        }
+        
+        manager.getBot().getNowplayingHandler().onTrackUpdate(guildId, track);
     }
 
-    
+    //
+    public NowPlayingInfo getNowPlayingInfo(JDA jda)
+    {
+        return new NowPlayingInfo(
+            audioPlayer.getPlayingTrack(),
+            jda.getGuildById(guildId),
+            audioPlayer.isPaused(),
+            audioPlayer.getVolume()
+        );
+    }
+
     // Formatting
     public MessageCreateData getNowPlaying(JDA jda)
     {
         if(isMusicPlaying(jda))
-        {
-            Guild guild = guild(jda);
-            AudioTrack track = audioPlayer.getPlayingTrack();
-            MessageCreateBuilder mb = new MessageCreateBuilder();
-            mb.setContent(FormatUtil.filter(manager.getBot().getConfig().getSuccess()+" **Now Playing in "+guild.getSelfMember().getVoiceState().getChannel().getAsMention()+"...**"));
-            EmbedBuilder eb = new EmbedBuilder();
-            eb.setColor(guild.getSelfMember().getColor());
-            RequestMetadata rm = getRequestMetadata();
-            if(rm.getOwner() != 0L)
-            {
-                User u = guild.getJDA().getUserById(rm.user.id);
-                if(u==null)
-                    eb.setAuthor(FormatUtil.formatUsername(rm.user), null, rm.user.avatar);
-                else
-                    eb.setAuthor(FormatUtil.formatUsername(u), null, u.getEffectiveAvatarUrl());
-            }
-
-            try 
-            {
-                eb.setTitle(track.getInfo().title, track.getInfo().uri);
-            }
-            catch(Exception e) 
-            {
-                eb.setTitle(track.getInfo().title);
-            }
-
-            if(track instanceof YoutubeAudioTrack && manager.getBot().getConfig().useNPImages())
-            {
-                eb.setThumbnail("https://img.youtube.com/vi/"+track.getIdentifier()+"/mqdefault.jpg");
-            }
-            
-            if(track.getInfo().author != null && !track.getInfo().author.isEmpty())
-                eb.setFooter("Source: " + track.getInfo().author, null);
-
-            double progress = (double)audioPlayer.getPlayingTrack().getPosition()/track.getDuration();
-            eb.setDescription(getStatusEmoji()
-                    + " "+FormatUtil.progressBar(progress)
-                    + " `[" + TimeUtil.formatTime(track.getPosition()) + "/" + TimeUtil.formatTime(track.getDuration()) + "]` "
-                    + FormatUtil.volumeIcon(audioPlayer.getVolume()));
-            
-            return mb.setEmbeds(eb.build()).build();
-        }
-        else return null;
+            return MessageFormatter.buildNowPlayingMessage(manager.getBot(), getNowPlayingInfo(jda));
+        return null;
     }
-    
+
     public MessageCreateData getNoMusicPlaying(JDA jda)
     {
-        Guild guild = guild(jda);
-        return new MessageCreateBuilder()
-                .setContent(FormatUtil.filter(manager.getBot().getConfig().getSuccess()+" **Now Playing...**"))
-                .setEmbeds(new EmbedBuilder()
-                .setTitle("No music playing")
-                .setDescription(STOP_EMOJI+" "+FormatUtil.progressBar(-1)+" "+FormatUtil.volumeIcon(audioPlayer.getVolume()))
-                .setColor(guild.getSelfMember().getColor())
-                .build()).build();
+        return MessageFormatter.buildNoMusicPlayingMessage(manager.getBot(), getNowPlayingInfo(jda));
     }
 
     public String getStatusEmoji()
@@ -319,12 +358,5 @@ public class AudioHandler extends AudioEventAdapter implements AudioSendHandler
     public boolean isOpus() 
     {
         return true;
-    }
-    
-    
-    // Private methods
-    private Guild guild(JDA jda)
-    {
-        return jda.getGuildById(guildId);
     }
 }

@@ -15,12 +15,11 @@
  */
 package com.jagrosh.jmusicbot.gui;
 
-import java.awt.Dimension;
-import java.awt.GridLayout;
-import java.io.PrintStream;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
+import java.awt.*;
+import javax.swing.*;
+
+import com.jagrosh.jmusicbot.utils.ConsoleUtil;
+
 
 /**
  *
@@ -31,13 +30,9 @@ public class ConsolePanel extends JPanel {
     public ConsolePanel()
     {
         super();
-        JTextArea text = new JTextArea();
-        text.setLineWrap(true);
-        text.setWrapStyleWord(true);
-        text.setEditable(false);
-        PrintStream con=new PrintStream(new TextAreaOutputStream(text));
-        System.setOut(con);
-        System.setErr(con);
+        // Ensure streams are redirected (will reuse existing if already done)
+        // This allows the GUI to use the same text area that was set up early in startup
+        JTextArea text = ConsoleUtil.redirectSystemStreams();
         
         JScrollPane pane = new JScrollPane();
         pane.setViewportView(text);

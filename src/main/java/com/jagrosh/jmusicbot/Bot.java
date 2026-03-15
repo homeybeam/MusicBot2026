@@ -15,21 +15,24 @@
  */
 package com.jagrosh.jmusicbot;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
 import com.jagrosh.jmusicbot.audio.AloneInVoiceHandler;
 import com.jagrosh.jmusicbot.audio.AudioHandler;
-import com.jagrosh.jmusicbot.audio.NowplayingHandler;
+import com.jagrosh.jmusicbot.audio.NowPlayingHandler;
 import com.jagrosh.jmusicbot.audio.PlayerManager;
 import com.jagrosh.jmusicbot.gui.GUI;
 import com.jagrosh.jmusicbot.playlist.PlaylistLoader;
 import com.jagrosh.jmusicbot.settings.SettingsManager;
-import java.util.Objects;
+import com.jagrosh.jmusicbot.utils.InstanceLock;
+import com.jagrosh.jmusicbot.utils.YoutubeOauth2TokenHandler;
 import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.OnlineStatus;
 import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.entities.Guild;
+
+import java.time.Instant;
+import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  *
@@ -43,8 +46,10 @@ public class Bot
     private final SettingsManager settings;
     private final PlayerManager players;
     private final PlaylistLoader playlists;
-    private final NowplayingHandler nowplaying;
+    private final NowPlayingHandler nowplaying;
     private final AloneInVoiceHandler aloneInVoiceHandler;
+    private final YoutubeOauth2TokenHandler youTubeOauth2TokenHandler;
+    private final Instant startTime;
     
     private boolean shuttingDown = false;
     private JDA jda;
@@ -57,9 +62,13 @@ public class Bot
         this.settings = settings;
         this.playlists = new PlaylistLoader(config);
         this.threadpool = Executors.newSingleThreadScheduledExecutor();
+        this.startTime = Instant.now();
+        this.youTubeOauth2TokenHandler = new YoutubeOauth2TokenHandler();
+        this.youTubeOauth2TokenHandler.init();
         this.players = new PlayerManager(this);
-        this.players.init();
-        this.nowplaying = new NowplayingHandler(this);
+        // Delay init of the PlayerManager until the GUI has started
+        // this.players.init();
+        this.nowplaying = new NowPlayingHandler(this);
         this.nowplaying.init();
         this.aloneInVoiceHandler = new AloneInVoiceHandler(this);
         this.aloneInVoiceHandler.init();
@@ -95,7 +104,7 @@ public class Bot
         return playlists;
     }
     
-    public NowplayingHandler getNowplayingHandler()
+    public NowPlayingHandler getNowplayingHandler()
     {
         return nowplaying;
     }
@@ -122,33 +131,40 @@ public class Bot
         Activity game = config.getGame()==null || config.getGame().getName().equalsIgnoreCase("none") ? null : config.getGame();
         if(!Objects.equals(jda.getPresence().getActivity(), game))
             jda.getPresence().setActivity(game);
-        OnlineStatus status = config.getStatus();
-        if(status != OnlineStatus.UNKNOWN && jda.getPresence().getStatus() != status)
-            jda.getPresence().setStatus(status);
     }
 
+    /**
+     * Performs a full graceful shutdown with complete cleanup.
+     * Use this for normal shutdowns (GUI close, /shutdown command).
+     */
     public void shutdown()
     {
         if(shuttingDown)
             return;
         shuttingDown = true;
-        threadpool.shutdownNow();
-        if(jda.getStatus()!=JDA.Status.SHUTTING_DOWN)
+        
+        // Clean up audio connections first (before shutting down thread pool, as these may trigger events that use it)
+        if(jda != null && jda.getStatus() != JDA.Status.SHUTTING_DOWN)
         {
             jda.getGuilds().stream().forEach(g -> 
             {
-                g.getAudioManager().closeAudioConnection();
                 AudioHandler ah = (AudioHandler)g.getAudioManager().getSendingHandler();
                 if(ah!=null)
                 {
                     ah.stopAndClear();
                     ah.getPlayer().destroy();
                 }
+                g.getAudioManager().closeAudioConnection();
             });
             jda.shutdown();
         }
+        
+        // Shut down thread pool after audio cleanup to avoid RejectedExecutionException
+        threadpool.shutdownNow();
+        
         if(gui!=null)
             gui.dispose();
+        InstanceLock.release();
         System.exit(0);
     }
 
@@ -160,5 +176,13 @@ public class Bot
     public void setGUI(GUI gui)
     {
         this.gui = gui;
+    }
+
+    public YoutubeOauth2TokenHandler getYouTubeOauth2Handler() {
+        return youTubeOauth2TokenHandler;
+    }
+    
+    public Instant getStartTime() {
+        return startTime;
     }
 }

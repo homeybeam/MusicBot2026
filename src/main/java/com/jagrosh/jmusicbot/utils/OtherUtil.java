@@ -17,22 +17,26 @@ package com.jagrosh.jmusicbot.utils;
 
 import com.jagrosh.jmusicbot.JMusicBot;
 import com.jagrosh.jmusicbot.entities.Prompt;
-import java.io.*;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.net.URLConnection;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-
+import com.jagrosh.jmusicbot.entities.UserInteraction;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.OnlineStatus;
 import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.entities.ApplicationInfo;
 import net.dv8tion.jda.api.entities.User;
-import okhttp3.*;
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.json.JSONTokener;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
+import java.io.*;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  *
@@ -43,7 +47,7 @@ public class OtherUtil
     public final static String NEW_VERSION_AVAILABLE = "There is a new version of JMusicBot available!\n"
                     + "Current version: %s\n"
                     + "New Version: %s\n\n"
-                    + "Please visit https://github.com/jagrosh/MusicBot/releases/latest to get the latest release.";
+                    + "Please visit https://github.com/arif-banai/MusicBot/releases/latest to get the latest release.";
     private final static String WINDOWS_INVALID_PATH = "c:\\windows\\system32\\";
     
     /**
@@ -72,13 +76,13 @@ public class OtherUtil
     /**
      * Loads a resource from the jar as a string
      * 
-     * @param clazz class base object
+     * @param clazz class to use for loading the resource
      * @param name name of resource
      * @return string containing the contents of the resource
      */
-    public static String loadResource(Object clazz, String name)
+    public static String loadResource(Class<?> clazz, String name)
     {
-        try(BufferedReader reader = new BufferedReader(new InputStreamReader(clazz.getClass().getResourceAsStream(name))))
+        try(BufferedReader reader = new BufferedReader(new InputStreamReader(clazz.getResourceAsStream(name), StandardCharsets.UTF_8)))
         {
             StringBuilder sb = new StringBuilder();
             reader.lines().forEach(line -> sb.append("\r\n").append(line));
@@ -154,25 +158,11 @@ public class OtherUtil
         return st == null ? OnlineStatus.ONLINE : st;
     }
     
-    public static void checkJavaVersion(Prompt prompt)
+    public static void checkJavaVersion(UserInteraction userInteraction)
     {
         if(!System.getProperty("java.vm.name").contains("64"))
-            prompt.alert(Prompt.Level.WARNING, "Java Version", 
+            userInteraction.alert(Prompt.Level.WARNING, "Java Version", 
                     "It appears that you may not be using a supported Java version. Please use 64-bit java.");
-    }
-    
-    public static void checkVersion(Prompt prompt)
-    {
-        // Get current version number
-        String version = getCurrentVersion();
-        
-        // Check for new version
-        String latestVersion = getLatestVersion();
-        
-        if(latestVersion!=null && !latestVersion.equals(version))
-        {
-            prompt.alert(Prompt.Level.WARNING, "JMusicBot Version", String.format(NEW_VERSION_AVAILABLE, version, latestVersion));
-        }
     }
     
     public static String getCurrentVersion()
@@ -185,31 +175,128 @@ public class OtherUtil
     
     public static String getLatestVersion()
     {
+        return getLatestVersion("https://api.github.com/repos/arif-banai/MusicBot");
+    }
+    
+    /**
+     * Gets the latest non-prerelease version from GitHub releases API.
+     * This method is public to allow testing with mock servers.
+     * 
+     * @param baseUrl the base URL for the GitHub API (e.g., "https://api.github.com/repos/arif-banai/MusicBot")
+     * @return the latest non-prerelease version tag (without 'v' prefix), or null if not found
+     */
+    public static String getLatestVersion(String baseUrl)
+    {
         try
         {
-            Response response = new OkHttpClient.Builder().build()
-                    .newCall(new Request.Builder().get().url("https://api.github.com/repos/jagrosh/MusicBot/releases/latest").build())
+            OkHttpClient client = new OkHttpClient.Builder().build();
+            // First, try to get the latest release
+            Response response = client.newCall(new Request.Builder().get()
+                    .url(baseUrl + "/releases/latest").build())
                     .execute();
             ResponseBody body = response.body();
             if(body != null)
             {
                 try(Reader reader = body.charStream())
                 {
-                    JSONObject obj = new JSONObject(new JSONTokener(reader));
-                    return obj.getString("tag_name");
+                    ObjectMapper objectMapper = new ObjectMapper();
+                    JsonNode obj = objectMapper.readTree(reader);
+                    if(obj != null && obj.has("tag_name"))
+                    {
+                        // Check if this is a pre-release
+                        boolean isPrerelease = obj.has("prerelease") && obj.get("prerelease").asBoolean();
+                        
+                        if(!isPrerelease)
+                        {
+                            // Not a pre-release, use it
+                            String tag = obj.get("tag_name").asText();
+                            if(tag.startsWith("v"))
+                                tag = tag.substring(1);
+                            return tag;
+                        }
+                    }
                 }
                 finally
                 {
                     response.close();
                 }
             }
-            else
-                return null;
+            
+            // If the latest release was a pre-release, fetch recent releases and find the latest non-prerelease
+            // Limit to first 10 releases (sorted by date, newest first) - should be more than enough
+            Response allReleasesResponse = client.newCall(new Request.Builder().get()
+                    .url(baseUrl + "/releases?per_page=10").build())
+                    .execute();
+            ResponseBody allReleasesBody = allReleasesResponse.body();
+            if(allReleasesBody != null)
+            {
+                try(Reader reader = allReleasesBody.charStream())
+                {
+                    ObjectMapper objectMapper = new ObjectMapper();
+                    JsonNode releases = objectMapper.readTree(reader);
+                    if(releases != null && releases.isArray())
+                    {
+                        // Find the first non-prerelease release
+                        for(JsonNode release : releases)
+                        {
+                            if(release.has("prerelease") && release.get("prerelease").asBoolean())
+                                continue; // Skip pre-releases
+                            
+                            if(release.has("tag_name"))
+                            {
+                                String tag = release.get("tag_name").asText();
+                                if(tag.startsWith("v"))
+                                    tag = tag.substring(1);
+                                return tag;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    allReleasesResponse.close();
+                }
+            }
+            return null;
         }
-        catch(IOException | JSONException | NullPointerException ex)
+        catch(IOException | NullPointerException ex)
         {
             return null;
         }
+    }
+
+    public static void checkVersion(UserInteraction userInteraction)
+    {
+        // Get current version number
+        String version = getCurrentVersion();
+
+        // Check for new version
+        String latestVersion = getLatestVersion();
+
+        if(latestVersion != null && isNewerVersion(version, latestVersion))
+        {
+            userInteraction.alert(Prompt.Level.WARNING, "JMusicBot Version", String.format(NEW_VERSION_AVAILABLE, version, latestVersion));
+        }
+    }
+
+    public static boolean isNewerVersion(String current, String latest)
+    {
+        if (current.equalsIgnoreCase("UNKNOWN"))
+            return true;
+
+        String[] currentParts = current.split("\\.");
+        String[] latestParts = latest.split("\\.");
+        int length = Math.max(currentParts.length, latestParts.length);
+
+        for (int i = 0; i < length; i++)
+        {
+            int curr = i < currentParts.length ? Integer.parseInt(currentParts[i].replaceAll("\\D", "")) : 0;
+            int late = i < latestParts.length ? Integer.parseInt(latestParts[i].replaceAll("\\D", "")) : 0;
+
+            if (late > curr) return true;
+            if (late < curr) return false;
+        }
+        return false;
     }
 
     /**

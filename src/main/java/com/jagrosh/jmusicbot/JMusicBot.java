@@ -15,226 +15,156 @@
  */
 package com.jagrosh.jmusicbot;
 
-import com.jagrosh.jdautilities.command.CommandClient;
-import com.jagrosh.jdautilities.command.CommandClientBuilder;
-import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
-import com.jagrosh.jdautilities.examples.command.*;
-import com.jagrosh.jmusicbot.commands.admin.*;
-import com.jagrosh.jmusicbot.commands.dj.*;
-import com.jagrosh.jmusicbot.commands.general.*;
-import com.jagrosh.jmusicbot.commands.music.*;
-import com.jagrosh.jmusicbot.commands.owner.*;
-import com.jagrosh.jmusicbot.entities.Prompt;
-import com.jagrosh.jmusicbot.gui.GUI;
-import com.jagrosh.jmusicbot.settings.SettingsManager;
-import com.jagrosh.jmusicbot.utils.OtherUtil;
-import java.awt.Color;
-import java.util.Arrays;
-import net.dv8tion.jda.api.*;
-import net.dv8tion.jda.api.audio.AudioModuleConfig;
-import net.dv8tion.jda.api.entities.Activity;
-import net.dv8tion.jda.api.requests.GatewayIntent;
-import net.dv8tion.jda.api.utils.cache.CacheFlag;
+import ch.qos.logback.classic.Level;
+import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
+import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import ch.qos.logback.classic.Level;
-import club.minnced.discord.jdave.interop.JDaveSessionFactory;
+
+import com.jagrosh.jdautilities.command.CommandClient;
+import com.jagrosh.jdautilities.commons.waiter.EventWaiter;
+import com.jagrosh.jmusicbot.commands.CommandFactory;
+import com.jagrosh.jmusicbot.entities.Prompt;
+import com.jagrosh.jmusicbot.entities.UserInteraction;
+import com.jagrosh.jmusicbot.gui.GUI;
+import com.jagrosh.jmusicbot.settings.SettingsManager;
+import com.jagrosh.jmusicbot.utils.ConsoleUtil;
+import com.jagrosh.jmusicbot.utils.InstanceLock;
+import com.jagrosh.jmusicbot.utils.OtherUtil;
 
 /**
  *
  * @author John Grosh (jagrosh)
  */
-public class JMusicBot {
+public class JMusicBot 
+{
     public final static Logger LOG = LoggerFactory.getLogger(JMusicBot.class);
-    public final static Permission[] RECOMMENDED_PERMS = { Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND,
-            Permission.MESSAGE_HISTORY, Permission.MESSAGE_ADD_REACTION,
-            Permission.MESSAGE_EMBED_LINKS, Permission.MESSAGE_ATTACH_FILES, Permission.MESSAGE_MANAGE,
+    public final static Permission[] RECOMMENDED_PERMS = {
+            Permission.VIEW_CHANNEL,
+            Permission.MESSAGE_SEND,
+            Permission.MESSAGE_HISTORY,
+            Permission.MESSAGE_ADD_REACTION,
+            Permission.MESSAGE_EMBED_LINKS,
+            Permission.MESSAGE_ATTACH_FILES,
+            Permission.MESSAGE_MANAGE,
             Permission.MESSAGE_EXT_EMOJI,
-            Permission.VOICE_CONNECT, Permission.VOICE_SPEAK, Permission.NICKNAME_CHANGE };
-    public final static GatewayIntent[] INTENTS = { GatewayIntent.MESSAGE_CONTENT, GatewayIntent.DIRECT_MESSAGES,
-            GatewayIntent.GUILD_MESSAGES, GatewayIntent.GUILD_MESSAGE_REACTIONS, GatewayIntent.GUILD_VOICE_STATES };
-
+            Permission.VOICE_CONNECT,
+            Permission.VOICE_SPEAK,
+            Permission.NICKNAME_CHANGE
+    };
+    public final static GatewayIntent[] INTENTS = {
+            GatewayIntent.DIRECT_MESSAGES,
+            GatewayIntent.GUILD_MESSAGES,
+            GatewayIntent.GUILD_MESSAGE_REACTIONS,
+            GatewayIntent.GUILD_VOICE_STATES,
+            GatewayIntent.MESSAGE_CONTENT
+    };
+    
     /**
      * @param args the command line arguments
      */
-    public static void main(String[] args) {
-        if (args.length > 0)
-            switch (args[0].toLowerCase()) {
-                case "generate-config":
-                    BotConfig.writeDefaultConfig();
-                    return;
-                default:
+    public static void main(String[] args)
+    {
+        if(args.length > 0) {
+            if (args[0].equalsIgnoreCase("generate-config")) {
+                BotConfig.writeDefaultConfig();
+                return;
             }
+        }
         startBot();
     }
-
-    private static void startBot() {
-        // create prompt to handle startup
-        Prompt prompt = new Prompt("JMusicBot");
-
+    
+    private static void startBot()
+    {
+        // create user interaction handler for startup
+        UserInteraction userInteraction = new Prompt("JMusicBot");
+        
+        // Redirect System.out/err to GUI console early (before config loading)
+        // so that all logs, including those from config loading, appear in GUI
+        if(!userInteraction.isNoGUI())
+        {
+            try 
+            {
+                ConsoleUtil.redirectSystemStreams();
+            }
+            catch(Exception e)
+            {
+                LOG.warn("Could not redirect console streams to GUI. Logs may not appear in GUI console.");
+            }
+        }
+        
+        // Check for another running instance
+        if (!InstanceLock.tryAcquire()) {
+            userInteraction.alert(Prompt.Level.ERROR, "JMusicBot",
+                    "Another instance of JMusicBot is already running.\n" +
+                    "Running multiple instances with the same configuration causes duplicate responses to commands.\n" +
+                    "Please close the other instance first.");
+            System.exit(1);
+        }
+        
         // startup checks
-        OtherUtil.checkVersion(prompt);
-        OtherUtil.checkJavaVersion(prompt);
-
+        OtherUtil.checkVersion(userInteraction);
+        OtherUtil.checkJavaVersion(userInteraction);
+        
         // load config
-        BotConfig config = new BotConfig(prompt);
+        BotConfig config = new BotConfig(userInteraction);
         config.load();
-        if (!config.isValid())
+        if(!config.isValid())
             return;
-        LOG.info("Loaded config from " + config.getConfigLocation());
+        LOG.info("Loaded config from {}", config.getConfigLocation());
 
         // set log level from config
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).setLevel(
                 Level.toLevel(config.getLogLevel(), Level.INFO));
-
+        
         // set up the listener
         EventWaiter waiter = new EventWaiter();
         SettingsManager settings = new SettingsManager();
         Bot bot = new Bot(waiter, config, settings);
-        CommandClient client = createCommandClient(config, settings, bot);
-
-        if (!prompt.isNoGUI()) {
-            try {
+        
+        // Initialize GUI (ConsolePanel will reuse the already-redirected streams)
+        if(!userInteraction.isNoGUI())
+        {
+            try 
+            {
                 GUI gui = new GUI(bot);
                 bot.setGUI(gui);
                 gui.init();
-
-                LOG.info("Loaded config from " + config.getConfigLocation());
-            } catch (Exception e) {
-                LOG.error("Could not start GUI. If you are "
-                        + "running on a server or in a location where you cannot display a "
-                        + "window, please run in nogui mode using the -Dnogui=true flag.");
+            }
+            catch(Exception e)
+            {
+                LOG.error("Could not start GUI. Use -Dnogui=true for server environments.");
             }
         }
+        
+        CommandClient client = CommandFactory.createCommandClient(config, settings, bot);
+
+        // Now that GUI/Logging is ready, initialize the player manager
+        bot.getPlayerManager().init();
 
         // attempt to log in and start
-        try {
-            JDA jda = JDABuilder.create(config.getToken(), Arrays.asList(INTENTS))
-                    .enableCache(CacheFlag.MEMBER_OVERRIDES, CacheFlag.VOICE_STATE)
-                    .disableCache(CacheFlag.ACTIVITY, CacheFlag.CLIENT_STATUS, CacheFlag.EMOJI, CacheFlag.ONLINE_STATUS,
-                            CacheFlag.STICKER, CacheFlag.SCHEDULED_EVENTS)
-                    .setActivity(config.isGameNone() ? null : Activity.playing("loading..."))
-                    .setStatus(
-                            config.getStatus() == OnlineStatus.INVISIBLE || config.getStatus() == OnlineStatus.OFFLINE
-                                    ? OnlineStatus.INVISIBLE
-                                    : OnlineStatus.DO_NOT_DISTURB)
-                    .addEventListeners(client, waiter, new Listener(bot))
-                    .setBulkDeleteSplittingEnabled(true)
-                    .setAudioModuleConfig(new AudioModuleConfig()
-                            .withDaveSessionFactory(new JDaveSessionFactory()))
-                    .build();
+        try
+        {
+            JDA jda = DiscordService.createJDA(config, bot, waiter, client, userInteraction);
             bot.setJDA(jda);
-
-            // check if something about the current startup is not supported
-            String unsupportedReason = OtherUtil.getUnsupportedBotReason(jda);
-            if (unsupportedReason != null) {
-                prompt.alert(Prompt.Level.ERROR, "JMusicBot",
-                        "JMusicBot cannot be run on this Discord bot: " + unsupportedReason);
-                try {
-                    Thread.sleep(5000);
-                } catch (InterruptedException ignored) {
-                } // this is awful but until we have a better way...
-                jda.shutdown();
-                System.exit(1);
-            }
-
-            // other check that will just be a warning now but may be required in the future
-            // check if the user has changed the prefix and provide info about the
-            // message content intent
-            if (!"@mention".equals(config.getPrefix())) {
-                LOG.info("JMusicBot", "You currently have a custom prefix set. "
-                        + "If your prefix is not working, make sure that the 'MESSAGE CONTENT INTENT' is Enabled "
-                        + "on https://discord.com/developers/applications/" + jda.getSelfUser().getId() + "/bot");
-            }
-        } catch (IllegalArgumentException ex) {
-            prompt.alert(Prompt.Level.ERROR, "JMusicBot", "Some aspect of the configuration is "
-                    + "invalid: " + ex + "\nConfig Location: " + config.getConfigLocation());
-            System.exit(1);
-        } catch (ErrorResponseException ex) {
-            prompt.alert(Prompt.Level.ERROR, "JMusicBot", ex + "\nInvalid reponse returned when "
-                    + "attempting to connect, please make sure you're connected to the internet");
+        }
+        catch(IllegalArgumentException ex)
+        {
+            userInteraction.alert(Prompt.Level.ERROR, "JMusicBot",
+                    "Invalid configuration. Check your token.\nConfig Location: " + config.getConfigLocation());
             System.exit(1);
         }
-    }
-
-    private static CommandClient createCommandClient(BotConfig config, SettingsManager settings, Bot bot) {
-        // instantiate about command
-        AboutCommand aboutCommand = new AboutCommand(Color.BLUE.brighter(),
-                "a music bot that is [easy to host yourself!](https://github.com/jagrosh/MusicBot) (v"
-                        + OtherUtil.getCurrentVersion() + ")",
-                new String[] { "High-quality music playback", "FairQueue™ Technology", "Easy to host yourself" },
-                RECOMMENDED_PERMS);
-        aboutCommand.setIsAuthor(false);
-        aboutCommand.setReplacementCharacter("\uD83C\uDFB6"); // 🎶
-
-        // set up the command client
-        CommandClientBuilder cb = new CommandClientBuilder()
-                .setPrefix(config.getPrefix())
-                .setAlternativePrefix(config.getAltPrefix())
-                .setOwnerId(Long.toString(config.getOwnerId()))
-                .setEmojis(config.getSuccess(), config.getWarning(), config.getError())
-                .setHelpWord(config.getHelp())
-                .setLinkedCacheSize(200)
-                .setGuildSettingsManager(settings)
-                .addCommands(aboutCommand,
-                        new PingCommand(),
-                        new SettingsCmd(bot),
-
-                        new LyricsCmd(bot),
-                        new NowplayingCmd(bot),
-                        new PlayCmd(bot),
-                        new PlaylistsCmd(bot),
-                        new QueueCmd(bot),
-                        new RemoveCmd(bot),
-                        new SearchCmd(bot),
-                        new SCSearchCmd(bot),
-                        new SeekCmd(bot),
-                        new ShuffleCmd(bot),
-                        new SkipCmd(bot),
-
-                        new ForceRemoveCmd(bot),
-                        new ForceskipCmd(bot),
-                        new MoveTrackCmd(bot),
-                        new PauseCmd(bot),
-                        new PlaynextCmd(bot),
-                        new RepeatCmd(bot),
-                        new SkiptoCmd(bot),
-                        new StopCmd(bot),
-                        new VolumeCmd(bot),
-
-                        new PrefixCmd(bot),
-                        new QueueTypeCmd(bot),
-                        new SetdjCmd(bot),
-                        new SkipratioCmd(bot),
-                        new SettcCmd(bot),
-                        new SetvcCmd(bot),
-
-                        new AutoplaylistCmd(bot),
-                        new DebugCmd(bot),
-                        new PlaylistCmd(bot),
-                        new SetavatarCmd(bot),
-                        new SetgameCmd(bot),
-                        new SetnameCmd(bot),
-                        new SetstatusCmd(bot),
-                        new ShutdownCmd(bot));
-
-        // enable eval if applicable
-        if (config.useEval())
-            cb.addCommand(new EvalCmd(bot));
-
-        // set status if set in config
-        if (config.getStatus() != OnlineStatus.UNKNOWN)
-            cb.setStatus(config.getStatus());
-
-        // set game
-        if (config.getGame() == null)
-            cb.useDefaultGame();
-        else if (config.isGameNone())
-            cb.setActivity(null);
-        else
-            cb.setActivity(config.getGame());
-
-        return cb.build();
+        catch(ErrorResponseException ex)
+        {
+            userInteraction.alert(Prompt.Level.ERROR, "JMusicBot", "Invalid response from Discord. Check your internet connection.");
+            System.exit(1);
+        }
+        catch(Exception ex)
+        {
+            LOG.error("An unexpected error occurred during startup", ex);
+            System.exit(1);
+        }
     }
 }

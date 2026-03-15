@@ -56,7 +56,7 @@ public class SettingsCmd extends Command
         VoiceChannel vchan = s.getVoiceChannel(event.getGuild());
         Role role = s.getRole(event.getGuild());
         EmbedBuilder ebuilder = new EmbedBuilder()
-                .setColor(event.getSelfMember().getColor())
+                .setColor(event.getSelfMember().getColors().getPrimary())
                 .setDescription("Text Channel: " + (tchan == null ? "Any" : "**#" + tchan.getName() + "**")
                         + "\nVoice Channel: " + (vchan == null ? "Any" : vchan.getAsMention())
                         + "\nDJ Role: " + (role == null ? "None" : "**" + role.getName() + "**")
@@ -70,7 +70,7 @@ public class SettingsCmd extends Command
                         + "\nDefault Playlist: " + (s.getDefaultPlaylist() == null ? "None" : "**" + s.getDefaultPlaylist() + "**")
                         )
                 .setFooter(event.getJDA().getGuilds().size() + " servers | "
-                        + event.getJDA().getGuilds().stream().filter(g -> g.getSelfMember().getVoiceState().inAudioChannel()).count()
+                        + event.getJDA().getGuilds().stream().filter(g -> g.getSelfMember().getVoiceState().getChannel() != null).count()
                         + " audio connections", null);
         event.getChannel().sendMessage(builder.setEmbeds(ebuilder.build()).build()).queue();
     }
