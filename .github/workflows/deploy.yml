@@ -13,7 +13,7 @@ jobs:
       - name: Deploy to VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: 136.114.36.85
+          host: 130.211.213.50
           username: chasepdrsn
           key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
           script: |
